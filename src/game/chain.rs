@@ -307,6 +307,8 @@ impl Chain {
                 for b in &mut self.balls[i + 1..=hi] {
                     b.back_vel = 0.0;
                 }
+                // The chain reaction is over for this gap.
+                self.balls[i + 1].combo = 0;
             }
             i = hi;
         }

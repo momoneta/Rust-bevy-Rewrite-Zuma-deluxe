@@ -8,7 +8,6 @@ license = "MIT"
 [dependencies]
 bevy = { version = "0.20.0", default-features = false, features = ["2d", "audio"] }
 image = { version = "0.25", default-features = false, features = ["gif", "jpeg", "png"] }
-roxmltree = "0.21"
 rand = "0.9"
 
 [profile.dev]

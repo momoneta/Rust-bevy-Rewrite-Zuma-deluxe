@@ -36,6 +36,10 @@ pub struct Play {
     bot_cooldown: i32,
     /// Frames the current dialog has been open (used by `--autoplay`).
     dialog_frames: u32,
+    /// Space bar pause (also set when the window loses focus).
+    paused: bool,
+    /// 't': show the time left to beat the ace time.
+    show_time: bool,
 }
 
 /// Number of ball colours for a level. The level settings only set `colors`
@@ -103,7 +107,7 @@ fn build(a: &mut GameAssets, images: &mut Assets<Image>, s: &mut Session) -> Opt
     s.graphics = level.graphics.id.clone();
     let board = Board::new(level, paths, colors, s.score, title);
     let lgfx = LevelGfx::load(a, images, &board);
-    Some(Play { board, lgfx, dialog: None, acc: 0.0, bot_cooldown: 100, dialog_frames: 0 })
+    Some(Play { board, lgfx, dialog: None, acc: 0.0, bot_cooldown: 100, dialog_frames: 0, paused: false, show_time: false })
 }
 
 pub fn enter(
@@ -164,13 +168,28 @@ pub fn update(
         }
     }
 
+    // Space pauses ("Press space bar to pause the game."), 't' shows the
+    // time left for the ace bonus; losing focus pauses as in the original.
+    if play.dialog.is_none() {
+        if keys.just_pressed(KeyCode::Space) {
+            play.paused = !play.paused;
+        }
+        if keys.just_pressed(KeyCode::KeyT) {
+            play.show_time = !play.show_time;
+        }
+        if !debug.autoplay && debug.screenshot.is_none() && windows.iter().any(|w| !w.focused) {
+            play.paused = true;
+        }
+        if play.paused && mouse.left_pressed && !menu_hover {
+            play.paused = false;
+            mouse.consumed = true;
+        }
+    }
+
     // Simulation at 100 Hz.
-    if play.dialog.is_none() && !options.open {
-        let mut input = BoardInput {
-            aim: mouse.pos,
-            fire: mouse.left_pressed && !menu_hover && !mouse.consumed,
-            swap: mouse.right_pressed || keys.just_pressed(KeyCode::Space),
-        };
+    if play.dialog.is_none() && !options.open && !play.paused {
+        let mut input =
+            BoardInput { aim: mouse.pos, fire: mouse.left_pressed && !menu_hover && !mouse.consumed, swap: mouse.right_pressed };
         if debug.autoplay {
             bot_input(play, &mut input);
         }
@@ -223,6 +242,17 @@ pub fn update(
 
     draw_board(&mut g, a, &play.lgfx, &play.board, mouse.pos, menu_hover);
     draw_lives(&mut g, a, session.lives);
+    if play.show_time && play.board.state == BoardState::Playing {
+        // Board::DrawOverlay draws this at (580, 460) with MAIN10OUTLINE.
+        let left = play.board.level.settings.par_time - play.board.seconds();
+        let txt = if left < 0 { format!("-{}", fmt_time(-left)) } else { fmt_time(left) };
+        g.text(a.font("FONT_MAIN10OUTLINE"), &txt, 580.0, 460.0, Color::srgb(1.0, 1.0, 0.0));
+    }
+    if play.paused && play.dialog.is_none() {
+        g.fill_rect(0.0, 0.0, 640.0, 480.0, Color::srgba(0.0, 0.0, 0.0, 0.5));
+        g.text_centered(a.font("FONT_HUGE"), "PAUSED", 320.0, 240.0, Color::WHITE);
+        g.text_centered(a.font("FONT_MAIN10"), "CLICK OR PRESS SPACE TO CONTINUE", 320.0, 280.0, Color::srgb(1.0, 0.9, 0.6));
+    }
 
     if options.open {
         options.draw(&mut g, a, &mut mouse, &mut sfx, &mut profile, &mut windows);

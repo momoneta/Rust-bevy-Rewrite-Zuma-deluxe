@@ -564,9 +564,9 @@ impl Board {
         let combo = c.balls[idx].combo;
         let found = c.find_match(idx).or_else(|| if idx > 0 { c.find_match(idx - 1) } else { None });
         match found {
-            Some((lo, hi)) if combo > 0 || c.balls[idx].color == c.balls[idx.saturating_sub(1)].color => {
-                self.explode(ci, lo, hi, combo.max(1), false);
-            }
+            // `combo` is set on the segment ahead of an explosion: a merge
+            // right after one is the next step of a chain reaction.
+            Some((lo, hi)) => self.explode(ci, lo, hi, combo, false),
             _ => {
                 self.chains[ci].balls[idx].combo = 0;
                 self.sound("SOUND_BALLCLICK2");
@@ -923,6 +923,62 @@ mod tests {
         b.check_inserted(0);
         assert_eq!(b.score - before, 30);
         assert_eq!(b.chains[0].balls.len(), n - 3);
+    }
+
+    #[test]
+    fn matching_gap_rolls_back_into_a_combo() {
+        let (level, paths) = straight_level(3000);
+        let mut b = Board::new(level, paths, 4, 0, "TEST".into());
+        b.state = BoardState::Playing;
+        b.bar_full = true; // no new balls
+        let c = &mut b.chains[0];
+        c.roll_in = false;
+        for (i, (col, pos)) in [(0, 100.0), (1, 132.0), (1, 164.0), (1, 400.0), (2, 432.0)].into_iter().enumerate() {
+            c.balls.push(Ball::new(i as u32, col, pos));
+        }
+        // As left by an explosion that opened the gap.
+        c.balls[3].combo = 1;
+        let input = BoardInput { aim: Vec2::new(320.0, 0.0), ..Default::default() };
+        for _ in 0..1000 {
+            b.update(&input);
+            if b.chains[0].balls.len() == 2 {
+                break;
+            }
+        }
+        let colors: Vec<u8> = b.chains[0].balls.iter().map(|x| x.color).collect();
+        assert_eq!(colors, vec![0, 2], "the three colour-1 balls exploded");
+        assert_eq!(b.stats.max_combo, 1);
+        // 10 per ball + 100 for the combo step.
+        assert_eq!(b.score, 3 * 10 + 100);
+    }
+
+    #[test]
+    fn inserted_ball_opens_the_chain_smoothly() {
+        let (level, paths) = straight_level(3000);
+        let mut b = Board::new(level, paths, 4, 0, "TEST".into());
+        b.state = BoardState::Playing;
+        b.bar_full = true;
+        let c = &mut b.chains[0];
+        c.roll_in = false;
+        for (i, pos) in [500.0, 532.0, 564.0].into_iter().enumerate() {
+            c.balls.push(Ball::new(i as u32, i as u8, pos));
+        }
+        let mut shot = Ball::new(99, 3, 532.0 - BALL_D * 0.5);
+        shot.from_shot = true;
+        c.insert(shot, 1, Vec2::new(532.0, 300.0));
+        let gap_after = |b: &Board| b.chains[0].balls[2].pos - b.chains[0].balls[0].pos;
+        let mut last = gap_after(&b);
+        assert!((last - BALL_D).abs() < 0.01, "no jump at insertion time");
+        let input = BoardInput { aim: Vec2::new(320.0, 0.0), ..Default::default() };
+        for _ in 0..20 {
+            b.update(&input);
+            let g = gap_after(&b);
+            assert!(g >= last - 0.01 && g - last <= BALL_D * 0.2, "grows gradually: {last} -> {g}");
+            last = g;
+        }
+        assert!((last - 2.0 * BALL_D).abs() < 0.01, "ends one ball wider: {last}");
+        let ids: Vec<u32> = b.chains[0].balls.iter().map(|x| x.id).collect();
+        assert_eq!(ids, vec![0, 99, 1, 2]);
     }
 
     #[test]

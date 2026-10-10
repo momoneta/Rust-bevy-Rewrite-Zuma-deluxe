@@ -45,7 +45,9 @@ con tus datos (ver “Capturas” abajo).
 |---|---|
 | Apuntar | ratón |
 | Disparar | clic izquierdo |
-| Intercambiar bola actual/siguiente | clic derecho o `Espacio` |
+| Intercambiar bola actual/siguiente | clic derecho |
+| Pausa | `Espacio` (también al perder el foco) |
+| Mostrar tiempo restante para el ACE | `T` |
 | Menú / pausa | botón **MENU** o `Esc` |
 
 ### Música
