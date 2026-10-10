@@ -50,10 +50,7 @@ pub fn update(
     }
     let a = &mut *assets;
     if let Some(sky) = a.img("IMAGE_MM_SKY") {
-        let off = ((st.ticks / 3) as f32) % sky.w;
-        g.image(sky, off - sky.w, 0.0);
-        g.image(sky, off, 0.0);
-        g.image(sky, off + sky.w, 0.0);
+        g.sky(sky, (st.ticks / 3) as f32, 0.0);
     }
     if let Some(back) = a.img("IMAGE_MM_BACK") {
         g.image(back, 0.0, 0.0);
@@ -63,7 +60,7 @@ pub fn update(
         if let Some(eye) = a.img(id) {
             let (socket, r) = SOCKETS[i];
             let c = EYE_MASK_POS + socket;
-            let d = mouse.pos - c;
+            let d = mouse.ui_pos() - c;
             let off = if d.length() > 0.1 { d.normalize() * (d.length() * 0.05).min(r) } else { Vec2::ZERO };
             let p = c + off;
             g.image(eye, (p.x - eye.w * 0.5).round(), (p.y - eye.h * 0.5).round());
@@ -106,6 +103,9 @@ pub fn update(
         let w = (img.w / 3.0).floor();
         g.sub(img, 0, Rect::new(0.0, 0.0, w, img.h), 394.0, 305.0, Color::WHITE);
     }
+    if crate::ui::dialog_button(&mut g, a, &mut mouse, &mut sfx, "CO-OP LAN", 14.0, 436.0, 150.0) {
+        next.set(Screen::Lobby);
+    }
     if image_button(&mut g, a, &mut mouse, &mut sfx, "IMAGE_MM_QUIT", 496.0, 315.0) {
         profile.save();
         exit.write(AppExit::Success);
@@ -119,7 +119,9 @@ fn make_eye_mask(a: &GameAssets, images: &mut Assets<Image>) -> Option<Img> {
     let mask = a.manifest.images.get("IMAGE_MM_EYEMASK")?;
     let back = image_load::load_image(&a.dir, &back.path, None, None, 1, 1)?;
     let mask = image_load::load_image(&a.dir, &mask.path, None, None, 1, 1)?;
-    let (ox, oy) = (EYE_MASK_POS.x as u32, EYE_MASK_POS.y as u32);
+    let (k, off) = crate::gfx::ui_xform();
+    let p = EYE_MASK_POS * k + off;
+    let (ox, oy) = (p.x as u32, p.y as u32);
     let mut out = image::RgbaImage::new(mask.width(), mask.height());
     for (x, y, p) in out.enumerate_pixels_mut() {
         if x + ox < back.width() && y + oy < back.height() {

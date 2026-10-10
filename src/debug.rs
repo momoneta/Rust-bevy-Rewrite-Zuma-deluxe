@@ -6,6 +6,8 @@
 //! * `--screenshot F`   save a screenshot to F after `--frames N` frames (default 300), then quit
 //! * `--frames N`       frame count for `--screenshot` / `--quit-after`
 //! * `--quit-after N`   exit after N frames
+//! * `--host`           open the co-op lobby and host (with `--level`, start there)
+//! * `--join IP`        open the co-op lobby and join IP
 
 use crate::screens::Screen;
 use bevy::app::AppExit;
@@ -21,6 +23,8 @@ pub struct DebugOptions {
     pub screenshot: Option<PathBuf>,
     pub frames: u32,
     pub quit_after: Option<u32>,
+    pub host: bool,
+    pub join: Option<String>,
 }
 
 impl DebugOptions {
@@ -49,6 +53,15 @@ impl DebugOptions {
                     i += 1;
                 }
                 "--autoplay" => d.autoplay = true,
+                "--host" => {
+                    d.host = true;
+                    d.start_screen = Some(Screen::Lobby);
+                }
+                "--join" => {
+                    d.join = Some(next);
+                    d.start_screen = Some(Screen::Lobby);
+                    i += 1;
+                }
                 "--screenshot" => {
                     d.screenshot = Some(PathBuf::from(next));
                     i += 1;

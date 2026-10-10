@@ -11,6 +11,7 @@ mod debug;
 mod game;
 mod gfx;
 mod input;
+mod net;
 mod profile;
 mod screens;
 mod ui;
@@ -18,7 +19,21 @@ mod ui;
 use bevy::prelude::*;
 use bevy::window::{MonitorSelection, WindowMode, WindowResolution};
 
+/// The screen size is the size of the loading screen: 640x480 for the
+/// original game, 1280x720 for widescreen mods.
+fn detect_screen() {
+    let Some(path) = data::vfs::locate_data_dir() else { return };
+    let Ok(dir) = data::vfs::DataDir::open(&path) else { return };
+    if let Some(img) = data::image_load::load_image(&dir, "images/loadingscreen", None, None, 1, 1) {
+        gfx::set_screen(img.width(), img.height());
+    }
+}
+
 fn main() {
+    detect_screen();
+    let scr = gfx::screen();
+    // Window: the game resolution scaled to a comfortable size.
+    let k = if scr.x <= 640.0 { 1.5 } else { 1.0 };
     let profile = profile::Profile::load();
     let mode = if profile.fullscreen { WindowMode::BorderlessFullscreen(MonitorSelection::Current) } else { WindowMode::Windowed };
     App::new()
@@ -27,7 +42,7 @@ fn main() {
                 .set(WindowPlugin {
                     primary_window: Some(Window {
                         title: "Zuma Deluxe (Rust + Bevy)".into(),
-                        resolution: WindowResolution::new(960, 720),
+                        resolution: WindowResolution::new((scr.x * k) as u32, (scr.y * k) as u32),
                         mode,
                         ..default()
                     }),

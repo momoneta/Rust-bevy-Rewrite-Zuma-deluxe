@@ -4,7 +4,7 @@
 //! (`DrawImage`, `DrawImageCel`, `DrawImageRotated`, `DrawString`...).  To keep
 //! the port of that drawing code readable, screens push draw commands into
 //! the [`Gfx`] resource in the 640x480 top-left-origin coordinate system of
-//! the original, and [`flush_gfx`] maps them onto a pool of sprite entities.
+//! the original (scaled for widescreen mods), and [`flush_gfx`] maps them onto a pool of sprite entities.
 
 use crate::additive::AdditiveMaterial;
 use crate::assets::{Font, Img};
@@ -12,8 +12,40 @@ use bevy::camera::ScalingMode;
 use bevy::math::Affine2;
 use bevy::prelude::*;
 
-pub const SCREEN_W: f32 = 640.0;
-pub const SCREEN_H: f32 = 480.0;
+use std::sync::atomic::{AtomicU32, Ordering};
+
+/// Original design resolution of every menu / HUD coordinate in the code.
+pub const DESIGN_W: f32 = 640.0;
+pub const DESIGN_H: f32 = 480.0;
+
+static SCREEN_W: AtomicU32 = AtomicU32::new(640);
+static SCREEN_H: AtomicU32 = AtomicU32::new(480);
+
+/// Real screen size: 640x480 for the original game, the size of
+/// `loadingscreen` for widescreen mods (e.g. 1280x720).
+pub fn screen() -> Vec2 {
+    Vec2::new(SCREEN_W.load(Ordering::Relaxed) as f32, SCREEN_H.load(Ordering::Relaxed) as f32)
+}
+
+pub fn set_screen(w: u32, h: u32) {
+    SCREEN_W.store(w.max(1), Ordering::Relaxed);
+    SCREEN_H.store(h.max(1), Ordering::Relaxed);
+}
+
+/// Mapping of the 640x480 design coordinates onto the real screen: a uniform
+/// scale (mods ship their UI art at that scale) and a centring offset.
+pub fn ui_xform() -> (f32, Vec2) {
+    let s = screen();
+    let k = (s.x / DESIGN_W).min(s.y / DESIGN_H);
+    (k, (s - Vec2::new(DESIGN_W, DESIGN_H) * k) * 0.5)
+}
+
+/// HUD coordinates: the menu bar of widescreen mods spans the whole width,
+/// so its 640x480 positions are stretched per axis.
+pub fn hud(x: f32, y: f32) -> Vec2 {
+    let s = screen();
+    Vec2::new(x * s.x / DESIGN_W, y * s.y / DESIGN_H)
+}
 
 #[derive(Clone)]
 struct DrawCmd {
@@ -57,11 +89,37 @@ pub struct Gfx {
     white: Handle<Image>,
     /// Translation applied to every draw (like `Graphics::Translate`).
     pub offset: Vec2,
+    /// When set, coordinates are real screen pixels (the playing field);
+    /// otherwise they are 640x480 design coordinates mapped by [`ui_xform`].
+    pub raw: bool,
 }
 
 impl Gfx {
     pub fn set_white(&mut self, white: Handle<Image>) {
         self.white = white;
+    }
+
+    /// Design coordinates to screen pixels.
+    pub fn tp(&self, x: f32, y: f32) -> Vec2 {
+        if self.raw {
+            return Vec2::new(x, y);
+        }
+        let (k, off) = ui_xform();
+        Vec2::new(x, y) * k + off
+    }
+
+    /// Design length to screen pixels.
+    pub fn ts(&self, v: Vec2) -> Vec2 {
+        if self.raw { v } else { v * ui_xform().0 }
+    }
+
+    /// Runs `f` drawing in raw screen pixels.
+    pub fn with_raw<R>(&mut self, f: impl FnOnce(&mut Self) -> R) -> R {
+        let old = self.raw;
+        self.raw = true;
+        let r = f(self);
+        self.raw = old;
+        r
     }
 
     fn push(&mut self, mut cmd: DrawCmd) {
@@ -71,6 +129,7 @@ impl Gfx {
 
     /// Changes the destination size of the last command (keeps its top-left).
     pub fn resize_last(&mut self, size: Vec2) {
+        let size = self.ts(size);
         if let Some(c) = self.cmds.last_mut() {
             c.size = size;
             c.pivot = Vec2::ZERO;
@@ -88,10 +147,15 @@ impl Gfx {
     pub fn draw_ex(&mut self, img: &Img, cel: usize, x: f32, y: f32, o: DrawOpts) {
         let size = Vec2::new(img.w, img.h) * o.scale;
         let pivot = o.pivot.map(|p| p * o.scale).unwrap_or(size * 0.5);
+        // Art as wide as the screen (widescreen mods) is anchored at the left edge.
+        let mut pos = self.tp(x, y);
+        if x == 0.0 && size.x >= screen().x {
+            pos.x = 0.0;
+        }
         self.push(DrawCmd {
             tex: img.cell(cel).clone(),
             src: None,
-            pos: Vec2::new(x, y),
+            pos,
             size,
             rot: o.rot,
             pivot,
@@ -102,16 +166,38 @@ impl Gfx {
         });
     }
 
+    /// Tiles a scrolling sky horizontally across the whole screen.
+    pub fn sky(&mut self, img: &Img, off: f32, y: f32) {
+        let top = self.tp(0.0, y).y;
+        self.with_raw(|g| {
+            let mut x = off % img.w - img.w;
+            while x < screen().x {
+                g.image(img, x, top);
+                x += img.w;
+            }
+        });
+    }
+
+    /// Draws an image scaled to fit a design-space box, centred in it.
+    pub fn fit(&mut self, img: &Img, x: f32, y: f32, w: f32, h: f32) {
+        let b = self.ts(Vec2::new(w, h));
+        let k = (b.x / img.w).min(b.y / img.h);
+        let p = self.tp(x, y) + (b - Vec2::new(img.w, img.h) * k) * 0.5;
+        self.with_raw(|g| g.draw_ex(img, 0, p.x, p.y, DrawOpts { scale: k, pivot: Some(Vec2::ZERO), ..default() }));
+    }
+
     /// Draws a centred image (cell) rotated around its centre.
     pub fn centered(&mut self, img: &Img, cel: usize, cx: f32, cy: f32, rot: f32, scale: f32, color: Color) {
         let o = DrawOpts { rot, color, scale, ..default() };
-        self.draw_ex(img, cel, cx - img.w * scale * 0.5, cy - img.h * scale * 0.5, o);
+        let c = self.tp(cx, cy);
+        self.with_raw(|g| g.draw_ex(img, cel, c.x - img.w * scale * 0.5, c.y - img.h * scale * 0.5, o));
     }
 
     /// Like [`Gfx::centered`] with additive blending.
     pub fn centered_add(&mut self, img: &Img, cel: usize, cx: f32, cy: f32, rot: f32, scale: f32, color: Color) {
         let o = DrawOpts { rot, color, scale, additive: true, ..default() };
-        self.draw_ex(img, cel, cx - img.w * scale * 0.5, cy - img.h * scale * 0.5, o);
+        let c = self.tp(cx, cy);
+        self.with_raw(|g| g.draw_ex(img, cel, c.x - img.w * scale * 0.5, c.y - img.h * scale * 0.5, o));
     }
 
     /// Draws part of a cell: `src` is a rectangle inside the cell.
@@ -124,10 +210,11 @@ impl Gfx {
         let (cx, cy) = ((cel as u32 % img.cols) as f32 * img.w, (cel as u32 / img.cols) as f32 * img.h);
         let r = Rect::new(cx + src.min.x, cy + src.min.y, cx + src.max.x, cy + src.max.y);
         let size = src.size() * o.scale;
+        let pos = self.tp(x, y);
         self.push(DrawCmd {
             tex: img.full.clone(),
             src: Some(r),
-            pos: Vec2::new(x, y),
+            pos,
             size,
             rot: o.rot,
             pivot: o.pivot.map(|p| p * o.scale).unwrap_or(size * 0.5),
@@ -140,11 +227,17 @@ impl Gfx {
 
     pub fn fill_rect(&mut self, x: f32, y: f32, w: f32, h: f32, color: Color) {
         let tex = self.white.clone();
+        // A full-screen fill covers the whole (possibly wider) screen.
+        let (pos, size) = if !self.raw && x <= 0.0 && y <= 0.0 && w >= DESIGN_W && h >= DESIGN_H {
+            (Vec2::ZERO, screen())
+        } else {
+            (self.tp(x, y), self.ts(Vec2::new(w, h)))
+        };
         self.push(DrawCmd {
             tex,
             src: None,
-            pos: Vec2::new(x, y),
-            size: Vec2::new(w, h),
+            pos,
+            size,
             rot: 0.0,
             pivot: Vec2::ZERO,
             color,
@@ -156,6 +249,11 @@ impl Gfx {
 
     /// `Graphics::DrawString`: `y` is the baseline.
     pub fn text(&mut self, font: &Font, s: &str, x: f32, y: f32, color: Color) {
+        let p = self.tp(x, y);
+        self.with_raw(|g| g.text_px(font, s, p.x, p.y, color));
+    }
+
+    fn text_px(&mut self, font: &Font, s: &str, x: f32, y: f32, color: Color) {
         let desc = font.desc.clone();
         let tags: Vec<&str> = font.tags.iter().map(String::as_str).collect();
         let chars: Vec<char> = s.chars().collect();
@@ -205,12 +303,14 @@ impl Gfx {
 
     pub fn text_centered(&mut self, font: &Font, s: &str, cx: f32, y: f32, color: Color) {
         let w = font.width(s);
-        self.text(font, s, (cx - w * 0.5).round(), y, color);
+        let p = self.tp(cx, y);
+        self.with_raw(|g| g.text_px(font, s, (p.x - w * 0.5).round(), p.y, color));
     }
 
     pub fn text_right(&mut self, font: &Font, s: &str, right: f32, y: f32, color: Color) {
         let w = font.width(s);
-        self.text(font, s, right - w, y, color);
+        let p = self.tp(right, y);
+        self.with_raw(|g| g.text_px(font, s, p.x - w, p.y, color));
     }
 
     /// Word-wrapped text inside a box; returns the height used.
@@ -259,14 +359,16 @@ pub struct SpritePool {
 pub struct PooledSprite;
 
 pub fn to_world(p: Vec2) -> Vec2 {
-    Vec2::new(p.x - SCREEN_W * 0.5, SCREEN_H * 0.5 - p.y)
+    let s = screen();
+    Vec2::new(p.x - s.x * 0.5, s.y * 0.5 - p.y)
 }
 
 pub fn setup_camera(mut commands: Commands) {
+    let s = screen();
     commands.spawn((
         Camera2d,
         Projection::Orthographic(OrthographicProjection {
-            scaling_mode: ScalingMode::AutoMin { min_width: SCREEN_W, min_height: SCREEN_H },
+            scaling_mode: ScalingMode::AutoMin { min_width: s.x, min_height: s.y },
             ..OrthographicProjection::default_2d()
         }),
         Camera { clear_color: ClearColorConfig::Custom(Color::BLACK), ..default() },
@@ -316,6 +418,7 @@ pub fn flush_gfx(
 ) {
     let cmds = std::mem::take(&mut gfx.cmds);
     gfx.offset = Vec2::ZERO;
+    gfx.raw = false;
     let quad = add_pool.quad.get_or_insert_with(|| meshes.add(Rectangle::new(1.0, 1.0))).clone();
     let (mut ns, mut na) = (0, 0);
     for (i, c) in cmds.iter().enumerate() {

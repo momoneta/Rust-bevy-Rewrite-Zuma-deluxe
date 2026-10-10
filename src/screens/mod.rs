@@ -4,6 +4,7 @@
 pub mod adventure;
 pub mod gauntlet;
 pub mod loading;
+pub mod lobby;
 pub mod main_menu;
 pub mod nodata;
 pub mod options;
@@ -23,6 +24,8 @@ pub enum Screen {
     MainMenu,
     Adventure,
     Gauntlet,
+    /// LAN co-op lobby.
+    Lobby,
     Playing,
 }
 
@@ -79,6 +82,9 @@ impl Plugin for ScreensPlugin {
             .add_systems(Update, adventure::update.run_if(in_state(Screen::Adventure)).in_set(ScreenSet))
             .add_systems(OnEnter(Screen::Gauntlet), gauntlet::enter)
             .add_systems(Update, gauntlet::update.run_if(in_state(Screen::Gauntlet)).in_set(ScreenSet))
+            .init_resource::<lobby::Lobby>()
+            .add_systems(OnEnter(Screen::Lobby), lobby::enter)
+            .add_systems(Update, lobby::update.run_if(in_state(Screen::Lobby)).in_set(ScreenSet))
             .add_systems(OnEnter(Screen::Playing), play::enter)
             .add_systems(OnExit(Screen::Playing), play::exit)
             .add_systems(Update, play::update.run_if(in_state(Screen::Playing)).in_set(ScreenSet));

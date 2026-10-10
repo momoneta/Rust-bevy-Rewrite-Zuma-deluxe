@@ -22,6 +22,8 @@ pub struct Profile {
     pub sound_volume: f32,
     pub music_volume: f32,
     pub fullscreen: bool,
+    /// Last IP typed in the co-op lobby.
+    pub last_ip: String,
 }
 
 impl Default for Profile {
@@ -36,6 +38,7 @@ impl Default for Profile {
             sound_volume: 0.8,
             music_volume: 0.6,
             fullscreen: false,
+            last_ip: String::new(),
         }
     }
 }
@@ -64,6 +67,7 @@ impl Profile {
                 "sound_volume" => p.sound_volume = v.parse().unwrap_or(0.8),
                 "music_volume" => p.music_volume = v.parse().unwrap_or(0.6),
                 "fullscreen" => p.fullscreen = v == "1",
+                "last_ip" => p.last_ip = v.to_string(),
                 k if k.starts_with("gauntlet.") => {
                     p.gauntlet_best.insert(k[9..].to_string(), v.parse().unwrap_or(0));
                 }
@@ -81,6 +85,7 @@ impl Profile {
         s += &format!("max_stage={}\nmax_level={}\nadventure_best={}\n", self.max_stage, self.max_level, self.adventure_best);
         s += &format!("unlocked={}\n", self.unlocked.join(","));
         s += &format!("sound_volume={}\nmusic_volume={}\nfullscreen={}\n", self.sound_volume, self.music_volume, self.fullscreen as u8);
+        s += &format!("last_ip={}\n", self.last_ip);
         for (k, v) in &self.gauntlet_best {
             s += &format!("gauntlet.{k}={v}\n");
         }

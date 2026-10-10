@@ -40,7 +40,7 @@ pub fn update(
     }
     if mouse.left_released || debug.skip_menus() {
         sfx.play("SOUND_BUTTON1");
-        if debug.level.is_some() {
+        if debug.level.is_some() && debug.start_screen.is_none() {
             next.set(Screen::Playing);
         } else {
             next.set(debug.start_screen.unwrap_or(Screen::MainMenu));

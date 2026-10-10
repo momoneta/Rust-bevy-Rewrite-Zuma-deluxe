@@ -96,7 +96,7 @@ pub struct Stats {
     pub play_ticks: i32,
 }
 
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct BoardInput {
     pub aim: Vec2,
     pub fire: bool,
@@ -107,7 +107,8 @@ pub struct Board {
     pub level: LevelDesc,
     pub title: String,
     pub chains: Vec<Chain>,
-    pub gun: Gun,
+    /// One frog per player (co-op has two).
+    pub guns: Vec<Gun>,
     pub bullets: Vec<Bullet>,
     pub effects: Vec<Effect>,
     pub texts: Vec<FloatText>,
@@ -140,6 +141,20 @@ pub struct Board {
 
 impl Board {
     pub fn new(level: LevelDesc, paths: Vec<Arc<CurvePath>>, colors: u8, score: i32, title: String) -> Self {
+        Self::with_players(level, paths, colors, score, title, 1, rand::random())
+    }
+
+    /// A board for `players` frogs. The simulation only depends on the seed
+    /// and the inputs, so two machines can run it in lockstep.
+    pub fn with_players(
+        level: LevelDesc,
+        paths: Vec<Arc<CurvePath>>,
+        colors: u8,
+        score: i32,
+        title: String,
+        players: usize,
+        seed: u64,
+    ) -> Self {
         let s = &level.settings;
         let chains = paths
             .into_iter()
@@ -150,12 +165,16 @@ impl Board {
                 Chain::new(p, cfg, n)
             })
             .collect::<Vec<_>>();
-        let gun = Gun::new(Vec2::new(level.graphics.gun.0 as f32, level.graphics.gun.1 as f32), s.reload_delay);
+        let main = Vec2::new(level.graphics.gun.0 as f32, level.graphics.gun.1 as f32);
+        let mut guns = vec![Gun::new(main, s.reload_delay)];
+        if players > 1 {
+            guns.push(Gun::new(second_frog_spot(main, &chains), s.reload_delay));
+        }
         let target = s.curves[0].score.max(1);
         Self {
             title,
             chains,
-            gun,
+            guns,
             bullets: Vec::new(),
             effects: Vec::new(),
             texts: Vec::new(),
@@ -181,9 +200,30 @@ impl Board {
             next_life: (score / EXTRA_LIFE_EVERY + 1) * EXTRA_LIFE_EVERY,
             last_coin: 0,
             next_id: 0,
-            rng: SmallRng::from_os_rng(),
+            rng: SmallRng::seed_from_u64(seed),
             level,
         }
+    }
+
+    /// Hash of the simulation state, compared between co-op machines.
+    pub fn checksum(&self) -> u64 {
+        let mut h: u64 = 0xcbf29ce484222325;
+        let mut mix = |v: u64| h = (h ^ v).wrapping_mul(0x100000001b3);
+        mix(self.score as u64);
+        mix(self.ticks as u64);
+        mix(self.bullets.len() as u64);
+        for c in &self.chains {
+            mix(c.balls.len() as u64);
+            for b in &c.balls {
+                mix(b.color as u64);
+                mix(b.pos.to_bits() as u64);
+            }
+        }
+        for g in &self.guns {
+            mix(g.current.map_or(99, u64::from));
+            mix(g.next.map_or(99, u64::from));
+        }
+        h
     }
 
     fn sound(&mut self, id: &'static str) {
@@ -224,13 +264,20 @@ impl Board {
         Some(present[self.rng.random_range(0..present.len())])
     }
 
-    pub fn update(&mut self, input: &BoardInput) {
+    fn aim_all(&mut self, inputs: &[BoardInput]) {
+        for (g, i) in self.guns.iter_mut().zip(inputs) {
+            g.aim_at(i.aim);
+        }
+    }
+
+    /// Advances one tick; `inputs[i]` drives frog `i`.
+    pub fn update(&mut self, inputs: &[BoardInput]) {
         self.ticks += 1;
         self.update_effects();
         self.update_holes();
         match self.state {
             BoardState::Intro(t) => {
-                self.gun.aim_at(input.aim);
+                self.aim_all(inputs);
                 if t == 0 {
                     self.sound("SOUND_FROGLAND");
                 }
@@ -241,9 +288,9 @@ impl Board {
                     self.state = BoardState::Intro(t + 1);
                 }
             }
-            BoardState::Playing => self.update_playing(input),
+            BoardState::Playing => self.update_playing(inputs),
             BoardState::Won(t) => {
-                self.gun.aim_at(input.aim);
+                self.aim_all(inputs);
                 self.update_bullets();
                 let max_len = self.chains.iter().map(|c| c.len()).fold(0.0, f32::max);
                 self.trail += 12.0;
@@ -287,38 +334,41 @@ impl Board {
         }
     }
 
-    fn update_playing(&mut self, input: &BoardInput) {
+    fn update_playing(&mut self, inputs: &[BoardInput]) {
         self.stats.play_ticks += 1;
         self.slow_ticks = (self.slow_ticks - 1).max(0);
         self.back_ticks = (self.back_ticks - 1).max(0);
         self.acc_ticks = (self.acc_ticks - 1).max(0);
         self.zuma_slow_ticks = (self.zuma_slow_ticks - 1).max(0);
 
-        // Frog.
-        self.gun.aim_at(input.aim);
-        if input.swap {
-            self.gun.swap();
-            if self.gun.state == super::gun::GunState::Ready {
-                self.sound("SOUND_BUTTON2");
-            }
-        }
-        if input.fire {
-            self.fire();
-        }
-        let mut gun = std::mem::replace(&mut self.gun, Gun::new(Vec2::ZERO, 0));
-        gun.tick(|| self.random_gun_color());
-        self.gun = gun;
-        // Replace frog balls whose colour has vanished from the board.
-        let present = self.colors_on_board();
-        if !present.is_empty() {
-            if let Some(c) = self.gun.current {
-                if !present.contains(&c) && self.gun.state == super::gun::GunState::Ready {
-                    self.gun.current = self.random_gun_color();
+        // Frogs.
+        for gi in 0..self.guns.len() {
+            let input = inputs.get(gi).copied().unwrap_or_default();
+            self.guns[gi].aim_at(input.aim);
+            if input.swap {
+                self.guns[gi].swap();
+                if self.guns[gi].state == super::gun::GunState::Ready {
+                    self.sound("SOUND_BUTTON2");
                 }
             }
-            if let Some(c) = self.gun.next {
-                if !present.contains(&c) {
-                    self.gun.next = self.random_gun_color();
+            if input.fire {
+                self.fire(gi);
+            }
+            let mut gun = std::mem::replace(&mut self.guns[gi], Gun::new(Vec2::ZERO, 0));
+            gun.tick(|| self.random_gun_color());
+            self.guns[gi] = gun;
+            // Replace frog balls whose colour has vanished from the board.
+            let present = self.colors_on_board();
+            if !present.is_empty() {
+                if let Some(c) = self.guns[gi].current {
+                    if !present.contains(&c) && self.guns[gi].state == super::gun::GunState::Ready {
+                        self.guns[gi].current = self.random_gun_color();
+                    }
+                }
+                if let Some(c) = self.guns[gi].next {
+                    if !present.contains(&c) {
+                        self.guns[gi].next = self.random_gun_color();
+                    }
                 }
             }
         }
@@ -415,15 +465,15 @@ impl Board {
         v
     }
 
-    fn fire(&mut self) {
-        let start = self.gun.ball_pos();
-        let Some(color) = self.gun.fire() else { return };
+    fn fire(&mut self, gi: usize) {
+        let start = self.guns[gi].ball_pos();
+        let Some(color) = self.guns[gi].fire() else { return };
         let mut speed = self.level.settings.fire_speed;
         if self.acc_ticks > 0 {
             speed *= 1.75;
         }
-        let dir = self.gun.dir();
-        self.bullets.push(Bullet { pos: start, vel: dir * speed, color, angle: self.gun.angle, min_gap: None, gaps: Vec::new() });
+        let dir = self.guns[gi].dir();
+        self.bullets.push(Bullet { pos: start, vel: dir * speed, color, angle: self.guns[gi].angle, min_gap: None, gaps: Vec::new() });
         self.sound("SOUND_BALLFIRE");
     }
 
@@ -448,7 +498,8 @@ impl Board {
                     remove = true;
                     break;
                 }
-                if !(-60.0..700.0).contains(&pos.x) || !(-60.0..540.0).contains(&pos.y) {
+                let scr = crate::gfx::screen();
+                if !(-60.0..scr.x + 60.0).contains(&pos.x) || !(-60.0..scr.y + 60.0).contains(&pos.y) {
                     remove = true;
                     if self.state == BoardState::Playing {
                         self.chain_count = 0;
@@ -725,7 +776,7 @@ impl Board {
             self.next_life += EXTRA_LIFE_EVERY;
             self.extra_lives += 1;
             self.sound("SOUND_EXTRA_LIFE");
-            let p = self.gun.center - Vec2::new(0.0, 60.0);
+            let p = self.guns[0].center - Vec2::new(0.0, 60.0);
             self.texts.push(FloatText { text: "EXTRA LIFE!".into(), pos: p, color: (255, 255, 0), age: 0, delay: 0 });
         }
     }
@@ -873,6 +924,29 @@ impl Board {
 }
 
 /// Whether segment p1-p2 crosses segment q1-q2.
+/// Where the second co-op frog sits: the free spot (away from every track)
+/// closest to the level's frog.
+fn second_frog_spot(main: Vec2, chains: &[Chain]) -> Vec2 {
+    let scr = crate::gfx::screen();
+    let pts: Vec<Vec2> = chains.iter().flat_map(|c| c.path.points.iter().step_by(8).map(|p| Vec2::new(p.x, p.y))).collect();
+    let clearance = |p: Vec2| pts.iter().map(|q| q.distance_squared(p)).fold(f32::MAX, f32::min).sqrt();
+    let mut best: Option<(f32, Vec2)> = None;
+    let mut y = 70.0;
+    while y < scr.y - 50.0 {
+        let mut x = 60.0;
+        while x < scr.x - 60.0 {
+            let p = Vec2::new(x, y);
+            let d = p.distance(main);
+            if d >= 120.0 && clearance(p) >= 60.0 && best.is_none_or(|(bd, _)| d < bd) {
+                best = Some((d, p));
+            }
+            x += 10.0;
+        }
+        y += 10.0;
+    }
+    best.map(|(_, p)| p).unwrap_or(main + Vec2::new(120.0, 0.0))
+}
+
 fn segments_cross(p1: Vec2, p2: Vec2, q1: Vec2, q2: Vec2) -> bool {
     let d = |a: Vec2, b: Vec2, c: Vec2| (b - a).perp_dot(c - a);
     let d1 = d(q1, q2, p1);
@@ -901,7 +975,7 @@ mod tests {
         let mut b = Board::new(level, paths, 4, 0, "TEST".into());
         let input = BoardInput { aim: Vec2::new(320.0, 0.0), ..Default::default() };
         for _ in 0..400 {
-            b.update(&input);
+            b.update(&[input]);
         }
         assert_eq!(b.state, BoardState::Playing);
         let c = &b.chains[0];
@@ -940,7 +1014,7 @@ mod tests {
         c.balls[3].combo = 1;
         let input = BoardInput { aim: Vec2::new(320.0, 0.0), ..Default::default() };
         for _ in 0..1000 {
-            b.update(&input);
+            b.update(&[input]);
             if b.chains[0].balls.len() == 2 {
                 break;
             }
@@ -971,7 +1045,7 @@ mod tests {
         assert!((last - BALL_D).abs() < 0.01, "no jump at insertion time");
         let input = BoardInput { aim: Vec2::new(320.0, 0.0), ..Default::default() };
         for _ in 0..20 {
-            b.update(&input);
+            b.update(&[input]);
             let g = gap_after(&b);
             assert!(g >= last - 0.01 && g - last <= BALL_D * 0.2, "grows gradually: {last} -> {g}");
             last = g;

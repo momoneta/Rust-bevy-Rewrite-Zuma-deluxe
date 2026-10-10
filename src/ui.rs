@@ -17,7 +17,7 @@ pub fn image_button(g: &mut Gfx, a: &GameAssets, m: &mut Mouse, sfx: &mut Sfx, i
 pub fn image_button_img(g: &mut Gfx, m: &mut Mouse, sfx: &mut Sfx, img: &Img, x: f32, y: f32, enabled: bool) -> bool {
     let w = (img.w / 3.0).floor();
     let h = img.h;
-    let over = enabled && m.over(x, y, w, h);
+    let over = enabled && m.over_px(x, y, w, h);
     let cell = if !over {
         0.0
     } else if m.left_down {
@@ -70,7 +70,7 @@ pub fn dialog_button(g: &mut Gfx, a: &GameAssets, m: &mut Mouse, sfx: &mut Sfx, 
     let Some(img) = a.img("IMAGE_DIALOG_BUTTON") else { return false };
     let cw = (img.w / 3.0).floor();
     let h = img.h;
-    let over = m.over(x, y, w, h);
+    let over = m.over_px(x, y, w * crate::gfx::ui_xform().0, h);
     let cell = if !over {
         0.0
     } else if m.left_down {
@@ -86,7 +86,9 @@ pub fn dialog_button(g: &mut Gfx, a: &GameAssets, m: &mut Mouse, sfx: &mut Sfx, 
     }
     let f = a.font("FONT_MAIN12");
     let col = if over { Color::srgb(1.0, 1.0, 0.6) } else { Color::srgb(1.0, 0.9, 0.5) };
-    g.text_centered(f, label, x + w * 0.5, y + h * 0.5 + f.ascent() * 0.5 - 1.0, col);
+    // `h` and the font are in pixels, `y` in design units.
+    let k = crate::gfx::ui_xform().0;
+    g.text_centered(f, label, x + w * 0.5, y + (h * 0.5 + f.ascent() * 0.5 - 1.0) / k, col);
     if over && m.left_released && !m.consumed {
         m.consumed = true;
         sfx.play("SOUND_BUTTON1");
@@ -101,9 +103,11 @@ pub fn slider(g: &mut Gfx, a: &GameAssets, m: &Mouse, x: f32, y: f32, value: f32
     g.image(track, x, y);
     let range = track.w - thumb.w;
     let mut v = value;
-    if m.left_down && m.over(x, y - 4.0, track.w, track.h + 8.0) {
-        v = ((m.pos.x - x - thumb.w * 0.5) / range).clamp(0.0, 1.0);
+    let k = crate::gfx::ui_xform().0;
+    if m.left_down && m.over_px(x, y - 4.0, track.w, track.h + 8.0) {
+        v = ((m.ui_pos().x - x) * k - thumb.w * 0.5) / range;
+        v = v.clamp(0.0, 1.0);
     }
-    g.image(thumb, x + v * range, y + (track.h - thumb.h) * 0.5);
+    g.image(thumb, x + v * range / k, y + (track.h - thumb.h) * 0.5 / k);
     v
 }

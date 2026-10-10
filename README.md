@@ -54,6 +54,45 @@ En **Windows** no hace falta nada más que Rust: copia la carpeta del juego como
 | Mostrar tiempo restante para el ACE | `T` |
 | Menú / pausa | botón **MENU** o `Esc` |
 
+### Mods widescreen (1280x720)
+
+Funcionan los mods panorámicos que cambian `images/`, `levels/` y
+`levels.xml` (por ejemplo el de 1280x720 con niveles en `.png`). La
+resolución se toma del tamaño de `images/loadingscreen`: el tablero usa las
+coordenadas reales de los niveles, el arte de pantalla completa se ancla al
+borde izquierdo, la barra superior se estira y los menús de 640x480 se
+escalan y se centran. Solo hay que usar la carpeta del mod como `data`
+(con su carpeta `levels/` completa, incluido `levels.xml`). Las miniaturas
+del Gauntlet se buscan en `levels/perm_thumbnails` y, si no están, en
+`levels/cached_thumbnails`.
+
+### Cooperativo por LAN (Radmin VPN, Hamachi o red local)
+
+Dos jugadores, dos ranas y **un mismo tablero** (puntos, vidas y barra
+compartidos). Desde el menú principal pulsa **CO-OP LAN**:
+
+1. Un jugador pulsa **CREAR PARTIDA**. Se muestran sus IP; con Radmin VPN
+   aparece la `26.x.x.x` marcada como *(RADMIN VPN)*.
+2. El otro escribe esa IP y pulsa **UNIRSE**.
+3. El anfitrión elige modo (Aventura con la etapa, o Gauntlet Survival) y
+   pulsa **EMPEZAR**. El anfitrión es P1 (la rana del nivel); P2 aparece en
+   el hueco libre más cercano.
+
+Requisitos: los dos PCs con el **mismo `levels.xml`** (se comprueba al
+conectar) y el puerto **TCP 27015** permitido en el firewall de Windows del
+anfitrión (Windows suele preguntarlo la primera vez; acepta en redes
+privadas). Con Radmin VPN basta con estar en la misma red de Radmin.
+
+Cómo funciona: es *lockstep* determinista. Cada PC simula el mismo tablero
+con la misma semilla y se envían solo las entradas (apuntar, disparar,
+cambiar bola) con 80 ms de retardo para absorber la latencia; cada segundo
+comparan una suma de comprobación y avisan si se desincronizan. El
+anfitrión decide continuar / reintentar; el menú de pausa no detiene la
+partida. Si la conexión se corta, aparece un aviso y se vuelve al menú.
+
+Para probarlo en un solo PC: `cargo run -- --host` en una terminal y
+`cargo run -- --join 127.0.0.1` en otra.
+
 ### Música
 
 La música original es `music/zuma.mo3`, un módulo tracker comprimido de BASS
@@ -140,7 +179,8 @@ final feliz. El progreso se guarda en `~/.config/zuma-bevy/profile.txt`
 
 ```
 src/
-  main.rs            App de Bevy, ventana 640x480 lógica escalada
+  main.rs            App de Bevy; resolución lógica = tamaño de loadingscreen
+  net.rs             cooperativo LAN: TCP, lockstep, sumas de comprobación
   data/              lectores de formatos originales (sin dependencia de Bevy)
     vfs.rs           carpeta de datos sin distinguir mayúsculas
     xml.rs           XML tolerante estilo Sexy::XMLParser
@@ -154,7 +194,7 @@ src/
   gfx.rs             dibujo inmediato (como Sexy::Graphics) sobre sprites de Bevy
   additive.rs        material 2D con mezcla aditiva
   game/              jugabilidad: board.rs, chain.rs, gun.rs, draw.rs
-  screens/           estados: carga, menú, aventura, gauntlet, juego, opciones
+  screens/           estados: carga, menú, aventura, gauntlet, sala co-op, juego, opciones
   ui.rs              botones, diálogos y sliders con el arte original
   audio.rs           efectos y música por pistas
   input.rs profile.rs debug.rs

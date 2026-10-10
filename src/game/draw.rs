@@ -6,6 +6,7 @@ use super::gun::GunState;
 use super::{BALL_D, COLOR_NAMES};
 use crate::assets::{GameAssets, Img, to_bevy_image};
 use crate::data::image_load;
+use crate::gfx::hud;
 use crate::gfx::{DrawOpts, Gfx};
 use bevy::prelude::*;
 use std::f32::consts::FRAC_PI_2;
@@ -80,6 +81,8 @@ fn rgb(c: (u8, u8, u8), a: f32) -> Color {
 }
 
 pub fn draw_board(g: &mut Gfx, a: &GameAssets, lg: &LevelGfx, b: &Board, mouse: Vec2, menu_hover: bool) {
+    // The playing field is in screen pixels (level files use the real resolution).
+    g.raw = true;
     // Background.
     if let Some(space) = &lg.space {
         let off = (b.ticks as f32 * 0.1) % space.h;
@@ -143,15 +146,16 @@ pub fn draw_board(g: &mut Gfx, a: &GameAssets, lg: &LevelGfx, b: &Board, mouse: 
     }
 
     // Accuracy guide.
-    if b.acc_ticks > 0 && b.state == BoardState::Playing {
-        if let Some(cur) = b.gun.current {
+    for gun in b.guns.iter().filter(|_| b.acc_ticks > 0 && b.state == BoardState::Playing) {
+        if let Some(cur) = gun.current {
             let col = super::BALL_RGB[cur as usize];
-            let dir = b.gun.dir();
-            let start = b.gun.ball_pos();
+            let dir = gun.dir();
+            let start = gun.ball_pos();
             let mut p = start;
-            for k in 0..60 {
+            let scr = crate::gfx::screen();
+            for k in 0..120 {
                 p += dir * 10.0;
-                if !(0.0..640.0).contains(&p.x) || !(0.0..480.0).contains(&p.y) || hits_ball(b, p) {
+                if !(0.0..scr.x).contains(&p.x) || !(0.0..scr.y).contains(&p.y) || hits_ball(b, p) {
                     break;
                 }
                 let alpha = 0.8 - k as f32 * 0.01;
@@ -165,7 +169,9 @@ pub fn draw_board(g: &mut Gfx, a: &GameAssets, lg: &LevelGfx, b: &Board, mouse: 
         draw_ball_sprite(g, a, bl.color, None, bl.pos, bl.angle, 0, true);
     }
 
-    draw_frog(g, a, lg, b);
+    for gun in &b.guns {
+        draw_frog(g, a, lg, gun, b.ticks);
+    }
 
     // Effects.
     for e in &b.effects {
@@ -202,11 +208,13 @@ pub fn draw_board(g: &mut Gfx, a: &GameAssets, lg: &LevelGfx, b: &Board, mouse: 
         let alpha = if t.age > 100 { 1.0 - (t.age - 100) as f32 / 50.0 } else { 1.0 };
         // Keep the text inside the playfield frame.
         let half = float.width(&t.text) * 0.5;
-        let x = t.pos.x.clamp(half + 12.0, 628.0 - half);
-        let y = t.pos.y.clamp(50.0, 468.0);
+        let scr = crate::gfx::screen();
+        let x = t.pos.x.clamp(half + 12.0, scr.x - 12.0 - half);
+        let y = t.pos.y.clamp(50.0, scr.y - 12.0);
         g.text_centered(float, &t.text, x, y, rgb(t.color, alpha));
     }
 
+    g.raw = false;
     draw_level_title(g, a, b);
     draw_hud(g, a, b, mouse, menu_hover);
 }
@@ -278,8 +286,7 @@ pub fn draw_ball_sprite(
     }
 }
 
-fn draw_frog(g: &mut Gfx, a: &GameAssets, lg: &LevelGfx, b: &Board) {
-    let gun = &b.gun;
+fn draw_frog(g: &mut Gfx, a: &GameAssets, lg: &LevelGfx, gun: &super::gun::Gun, ticks: i32) {
     let (cx, cy) = (gun.center.x, gun.center.y);
     let rot = gun.angle;
     if let Some(bottom) = a.img("IMAGE_SHOOTER_BOTTOM") {
@@ -303,7 +310,7 @@ fn draw_frog(g: &mut Gfx, a: &GameAssets, lg: &LevelGfx, b: &Board) {
     }
     // Eye blink: two lid frames stacked vertically (20px each); frame 0 for
     // ticks 1-4 and 20-24 of the blink, frame 1 (closed) in between.
-    let blink = (b.ticks % 400) as i32;
+    let blink = ticks % 400;
     if blink < 25 {
         if let Some(eye) = a.img("IMAGE_EYE_BLINK") {
             let half = (eye.h / 2.0).floor();
@@ -331,48 +338,60 @@ fn draw_level_title(g: &mut Gfx, a: &GameAssets, b: &Board) {
 }
 
 pub fn draw_hud(g: &mut Gfx, a: &GameAssets, b: &Board, _mouse: Vec2, menu_hover: bool) {
+    g.raw = true;
     if let Some(bar) = a.img("IMAGE_MENU_BAR") {
         g.image(bar, 0.0, 0.0);
     }
     let yellow = Color::srgb(1.0, 1.0, 0.0);
     let main = a.font("FONT_MAIN10");
-    g.text_centered(main, &b.title, 200.0, 17.0, yellow);
+    let p = hud(200.0, 17.0);
+    g.text_centered(main, &b.title, p.x, p.y, yellow);
 
     let mono = a.font("FONT_MONODIGIT");
-    g.text_right(mono, &b.score.to_string(), 360.0, 18.0, yellow);
+    let p = hud(360.0, 18.0);
+    g.text_right(mono, &b.score.to_string(), p.x, p.y, yellow);
 
     if let (Some(gauge), Some(done)) = (a.img("IMAGE_ZUMA_BAR"), a.img("IMAGE_ZUMA_BAR_DONE")) {
         let p = b.bar_progress();
         let img = if b.bar_full { done } else { gauge };
         let w = (img.w * p).floor();
         if w > 0.0 {
-            g.sub(img, 0, Rect::new(0.0, 0.0, w, img.h), 409.0, 2.0, Color::WHITE);
+            let p = hud(409.0, 2.0);
+            g.sub(img, 0, Rect::new(0.0, 0.0, w, img.h), p.x, p.y, Color::WHITE);
         }
     }
     if let Some(btn) = a.img("IMAGE_MENU_BUTTON") {
         if menu_hover {
-            g.cel(btn, 1, 540.0, 3.0);
+            let p = hud(540.0, 3.0);
+            g.cel(btn, 1, p.x, p.y);
         }
     }
+    g.raw = false;
 }
 
 /// Lives are drawn by the play screen (they belong to the session).
 pub fn draw_lives(g: &mut Gfx, a: &GameAssets, lives: i32) {
+    g.with_raw(|g| draw_lives_px(g, a, lives));
+}
+
+fn draw_lives_px(g: &mut Gfx, a: &GameAssets, lives: i32) {
     let shown = lives - 1;
     if shown <= 0 {
         if lives == 1 {
-            g.text_centered(a.font("FONT_MAIN10"), "Last Life", 64.0, 20.0, Color::srgb(1.0, 1.0, 0.0));
+            let p = hud(64.0, 20.0);
+            g.text_centered(a.font("FONT_MAIN10"), "Last Life", p.x, p.y, Color::srgb(1.0, 1.0, 0.0));
         }
         return;
     }
     let Some(icon) = a.img("IMAGE_FROG_LIVES") else { return };
     let icons = if shown > 3 { 1 } else { shown };
-    let mut x = 28.0;
+    let p = hud(28.0, 3.0);
+    let mut x = p.x;
     for _ in 0..icons {
-        g.image(icon, x, 3.0);
-        x += 26.0;
+        g.image(icon, x, p.y);
+        x += icon.w + 2.0;
     }
     if shown > 3 {
-        g.text(a.font("FONT_MAIN10"), &format!("x{shown}"), x + 4.0, 22.0, Color::srgb(1.0, 1.0, 0.0));
+        g.text(a.font("FONT_MAIN10"), &format!("x{shown}"), x + 4.0, hud(0.0, 22.0).y, Color::srgb(1.0, 1.0, 0.0));
     }
 }

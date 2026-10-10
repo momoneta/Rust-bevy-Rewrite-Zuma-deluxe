@@ -59,17 +59,16 @@ pub fn update(
         return;
     }
     let graphics = assets.levels.gauntlet[st.selected.min(n - 1)].graphics.clone();
-    let thumb = assets.file_image(&format!("levels/perm_thumbnails/{graphics}"), &mut images);
+    let thumb = assets
+        .file_image(&format!("levels/perm_thumbnails/{graphics}"), &mut images)
+        .or_else(|| assets.file_image(&format!("levels/cached_thumbnails/{graphics}"), &mut images));
     let a = &*assets;
 
     if let Some(sky) = a.img("IMAGE_GAUNTSKY") {
-        let off = ((st.ticks / 4) as f32) % sky.w;
-        g.image(sky, off - sky.w, 0.0);
-        g.image(sky, off, 0.0);
-        g.image(sky, off + sky.w, 0.0);
+        g.sky(sky, (st.ticks / 4) as f32, 0.0);
     }
     if let Some(t) = &thumb {
-        g.image(t, 170.0, 220.0);
+        g.fit(t, 170.0, 220.0, 320.0, 240.0);
     }
     for (id, x, y) in [("IMAGE_GAUNTSCREEN", 0.0, 0.0), ("IMAGE_GAUNTTITLE", 0.0, 0.0), ("IMAGE_GAUNTHIGHSCORE", 434.0, 0.0)] {
         if let Some(img) = a.img(id) {
@@ -117,7 +116,7 @@ pub fn update(
     let four = |g: &mut Gfx, m: &mut Mouse, sfx: &mut Sfx, id: &str, x: f32, y: f32, enabled: bool| -> bool {
         let Some(img) = a.img(id) else { return false };
         let w = (img.w / 4.0).floor();
-        let over = enabled && m.over(x, y, w, img.h);
+        let over = enabled && m.over_px(x, y, w, img.h);
         let cell = if !enabled {
             3.0
         } else if over && m.left_down {
@@ -156,7 +155,7 @@ pub fn update(
     for (id, x, y, surv) in [("IMAGE_GAUNTPRACTICEBUTTON", 506.0, 413.0, false), ("IMAGE_GAUNTSURVIVALBUTTON", 505.0, 446.0, true)] {
         if let Some(img) = a.img(id) {
             let w = (img.w / 3.0).floor();
-            let over = mouse.over(x, y, w, img.h);
+            let over = mouse.over_px(x, y, w, img.h);
             let cell = if st.survival == surv {
                 2.0
             } else if over {

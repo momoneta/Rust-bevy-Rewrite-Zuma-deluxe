@@ -87,10 +87,7 @@ pub fn update(
     let a = &*assets;
     let max = profile.max_stage.min(a.levels.stages.len().saturating_sub(1));
     if let Some(sky) = a.img("IMAGE_ADVSKY") {
-        let off = ((st.ticks / 4) as f32) % sky.w;
-        g.image(sky, off - sky.w, 0.0);
-        g.image(sky, off, 0.0);
-        g.image(sky, off + sky.w, 0.0);
+        g.sky(sky, (st.ticks / 4) as f32, 0.0);
     }
     for (id, x, y) in [("IMAGE_ADVBACK", 0.0, 0.0), ("IMAGE_ADVTITLE", 0.0, 0.0), ("IMAGE_ADVHIGHSCORE", 456.0, 0.0)] {
         if let Some(img) = a.img(id) {
@@ -104,7 +101,7 @@ pub fn update(
     for (i, &(x, y)) in DOORS.iter().enumerate() {
         if let Some(img) = a.img(DOOR_IMAGES[i]) {
             let w = (img.w / 4.0).floor();
-            if i <= max && mouse.over(x, y, w, img.h) {
+            if i <= max && mouse.over_px(x, y, w, img.h) {
                 hover = Some(i);
             }
         }
