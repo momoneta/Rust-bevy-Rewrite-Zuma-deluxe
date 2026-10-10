@@ -89,22 +89,6 @@ fn apply_alpha(img: &mut RgbaImage, alpha: &RgbaImage, ox: u32, oy: u32) {
     }
 }
 
-/// Converts an image meant for additive blending (black background) into an
-/// alpha-blended equivalent: alpha = brightness, colour = normalised colour.
-pub fn additive_to_alpha(img: &mut RgbaImage) {
-    for p in img.pixels_mut() {
-        let m = p[0].max(p[1]).max(p[2]);
-        if m == 0 {
-            p[3] = 0;
-            continue;
-        }
-        for c in 0..3 {
-            p[c] = ((p[c] as u32 * 255) / m as u32) as u8;
-        }
-        p[3] = ((p[3] as u32 * m as u32) / 255) as u8;
-    }
-}
-
 /// Splits a strip into `rows`x`cols` cells (row-major).
 pub fn split_cells(img: &RgbaImage, rows: u32, cols: u32) -> Vec<RgbaImage> {
     let rows = rows.max(1);

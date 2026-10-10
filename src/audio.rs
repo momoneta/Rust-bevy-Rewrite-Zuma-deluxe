@@ -48,22 +48,52 @@ pub fn play_sounds(mut commands: Commands, mut sfx: ResMut<Sfx>, assets: Option<
     }
 }
 
-/// Starts the looping music (if a converted track exists) and applies the volume setting.
+/// Music tracks (subsongs of the original zuma.mo3, see
+/// `tools/convert_music.sh`). The original picks them by module order
+/// position: 0 main theme, 36 danger, 38/39 jingles... (`FUN_00511100`).
+pub mod track {
+    pub const MAIN: usize = 0;
+    pub const STAGE_COMPLETE: usize = 3;
+    pub const GAME_OVER: usize = 4;
+    pub const DANGER: usize = 5;
+    pub const LIFE_LOST: usize = 6;
+    pub const LEVEL_COMPLETE: usize = 7;
+}
+
+/// Which track the current screen wants.
+#[derive(Resource, Default)]
+pub struct MusicCtl {
+    pub want: Option<usize>,
+    playing: Option<usize>,
+}
+
+impl MusicCtl {
+    pub fn play(&mut self, track: usize) {
+        self.want = Some(track);
+    }
+}
+
+/// Switches tracks when the wanted one changes and applies the volume setting.
 pub fn update_music(
     mut commands: Commands,
     assets: Option<Res<GameAssets>>,
     profile: Res<Profile>,
+    mut ctl: ResMut<MusicCtl>,
     mut sinks: Query<&mut AudioSink, With<Music>>,
-    existing: Query<(), With<Music>>,
+    playing: Query<Entity, With<Music>>,
 ) {
     let Some(assets) = assets else { return };
-    let Some(music) = &assets.music else { return };
-    if existing.is_empty() {
-        commands.spawn((
-            AudioPlayer::new(music.clone()),
-            PlaybackSettings { volume: Volume::Linear(profile.music_volume), ..PlaybackSettings::LOOP },
-            Music,
-        ));
+    if ctl.want != ctl.playing {
+        for e in &playing {
+            commands.entity(e).despawn();
+        }
+        ctl.playing = ctl.want;
+        let handle = ctl.want.and_then(|t| assets.music.get(t).cloned().flatten());
+        if let (Some(t), Some(h)) = (ctl.want, handle) {
+            let looping = matches!(t, track::MAIN | track::DANGER | 1 | 2);
+            let base = if looping { PlaybackSettings::LOOP } else { PlaybackSettings::DESPAWN };
+            commands.spawn((AudioPlayer::new(h), PlaybackSettings { volume: Volume::Linear(profile.music_volume), ..base }, Music));
+        }
         return;
     }
     if profile.is_changed() {

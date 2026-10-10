@@ -3,7 +3,7 @@
 
 use super::{Mode, Screen, Session, options::OptionsDialog};
 use crate::assets::GameAssets;
-use crate::audio::Sfx;
+use crate::audio::{MusicCtl, Sfx, track};
 use crate::data::curve::CurvePath;
 use crate::data::levels::LevelDesc;
 use crate::debug::DebugOptions;
@@ -34,6 +34,8 @@ pub struct Play {
     pub dialog: Option<PlayDialog>,
     acc: f32,
     bot_cooldown: i32,
+    /// Frames the current dialog has been open (used by `--autoplay`).
+    dialog_frames: u32,
 }
 
 /// Number of ball colours for a level. The level settings only set `colors`
@@ -101,7 +103,7 @@ fn build(a: &mut GameAssets, images: &mut Assets<Image>, s: &mut Session) -> Opt
     s.graphics = level.graphics.id.clone();
     let board = Board::new(level, paths, colors, s.score, title);
     let lgfx = LevelGfx::load(a, images, &board);
-    Some(Play { board, lgfx, dialog: None, acc: 0.0, bot_cooldown: 100 })
+    Some(Play { board, lgfx, dialog: None, acc: 0.0, bot_cooldown: 100, dialog_frames: 0 })
 }
 
 pub fn enter(
@@ -146,6 +148,7 @@ pub fn update(
     mut options: ResMut<OptionsDialog>,
     mut windows: Query<&mut Window>,
     debug: Res<DebugOptions>,
+    mut music: ResMut<MusicCtl>,
 ) {
     let Some(mut play) = play else { return };
     let play = &mut *play;
@@ -204,6 +207,20 @@ pub fn update(
         }
     }
 
+    music.play(match &play.dialog {
+        None | Some(PlayDialog::Menu) => {
+            if play.board.danger && matches!(play.board.state, BoardState::Playing | BoardState::Lost(_)) {
+                track::DANGER
+            } else {
+                track::MAIN
+            }
+        }
+        Some(PlayDialog::LevelComplete { stage_done: true, .. }) | Some(PlayDialog::Victory) => track::STAGE_COMPLETE,
+        Some(PlayDialog::LevelComplete { .. }) => track::LEVEL_COMPLETE,
+        Some(PlayDialog::LifeLost) => track::LIFE_LOST,
+        Some(PlayDialog::GameOver) => track::GAME_OVER,
+    });
+
     draw_board(&mut g, a, &play.lgfx, &play.board, mouse.pos, menu_hover);
     draw_lives(&mut g, a, session.lives);
 
@@ -211,7 +228,12 @@ pub fn update(
         options.draw(&mut g, a, &mut mouse, &mut sfx, &mut profile, &mut windows);
         return;
     }
-    let Some(dialog) = play.dialog.clone() else { return };
+    let Some(dialog) = play.dialog.clone() else {
+        play.dialog_frames = 0;
+        return;
+    };
+    play.dialog_frames += 1;
+    let bot_go = debug.autoplay && play.dialog_frames > 30;
     let f = a.font("FONT_MAIN12");
     let col = Color::srgb(1.0, 0.9, 0.6);
     match dialog {
@@ -248,7 +270,7 @@ pub fn update(
             g.text_centered(a.font("FONT_MAIN10OUTLINE2"), &btxt, x + w * 0.5, y + 210.0, Color::srgb(1.0, 1.0, 0.0));
             let go = dialog_button(&mut g, a, &mut mouse, &mut sfx, "CONTINUE", x + 70.0, y + h - 70.0, 160.0)
                 || keys.just_pressed(KeyCode::Enter)
-                || (debug.autoplay && play.board.ticks % 200 == 0);
+                || bot_go;
             if go {
                 if advance(a, &mut session, &mut profile) {
                     restart(play, a, &mut images, &mut session, &mut next);
@@ -264,7 +286,7 @@ pub fn update(
             g.text_centered(f, &msg, x + w * 0.5, y + 95.0, col);
             if dialog_button(&mut g, a, &mut mouse, &mut sfx, "TRY AGAIN", x + 45.0, y + h - 70.0, 160.0)
                 || keys.just_pressed(KeyCode::Enter)
-                || debug.autoplay
+                || bot_go
             {
                 restart(play, a, &mut images, &mut session, &mut next);
             }

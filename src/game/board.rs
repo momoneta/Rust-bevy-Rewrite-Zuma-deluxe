@@ -128,6 +128,8 @@ pub struct Board {
     pub sounds: Vec<SoundReq>,
     /// Position of the end-of-level light on each curve.
     pub trail: f32,
+    /// Skull cover animation frame (0 = closed .. 11 = open) per curve.
+    pub hole_open: Vec<f32>,
     zuma_back_left: f32,
     zuma_slow_ticks: i32,
     next_life: i32,
@@ -173,6 +175,7 @@ impl Board {
             extra_lives: 0,
             sounds: Vec::new(),
             trail: 0.0,
+            hole_open: Vec::new(),
             zuma_back_left: 0.0,
             zuma_slow_ticks: 0,
             next_life: (score / EXTRA_LIFE_EVERY + 1) * EXTRA_LIFE_EVERY,
@@ -224,6 +227,7 @@ impl Board {
     pub fn update(&mut self, input: &BoardInput) {
         self.ticks += 1;
         self.update_effects();
+        self.update_holes();
         match self.state {
             BoardState::Intro(t) => {
                 self.gun.aim_at(input.aim);
@@ -509,7 +513,9 @@ impl Board {
         let hit = &c.balls[bi];
         let hp = c.screen_pos(hit.pos);
         let tangent = c.screen_pos(hit.pos + 2.0) - c.screen_pos(hit.pos - 2.0);
-        let (idx, pos) = if (bullet.pos - hp).dot(tangent) > 0.0 { (bi + 1, hit.pos + BALL_D) } else { (bi, hit.pos) };
+        // The new ball starts with zero width half a ball from the hit one and
+        // grows, pushing the balls ahead (see `Chain::spacing`).
+        let (idx, pos) = if (bullet.pos - hp).dot(tangent) > 0.0 { (bi + 1, hit.pos + BALL_D * 0.5) } else { (bi, hit.pos - BALL_D * 0.5) };
         self.next_id += 1;
         let mut ball = Ball::new(self.next_id, bullet.color, pos);
         ball.from_shot = true;
@@ -824,6 +830,26 @@ impl Board {
                 life: 40,
                 variant: self.rng.random_range(0..5),
             });
+        }
+    }
+
+    /// The skull over each hole opens as the chain head gets close.
+    fn update_holes(&mut self) {
+        self.hole_open.resize(self.chains.len(), 0.0);
+        for (i, c) in self.chains.iter().enumerate() {
+            let target = match self.state {
+                BoardState::Lost(_) => 11.0,
+                BoardState::Playing => match c.head_pos() {
+                    Some(h) => {
+                        let danger = c.cfg.danger.max(1) as f32;
+                        ((1.0 - (c.len() - h) / danger) * 11.0).clamp(0.0, 11.0)
+                    }
+                    None => 0.0,
+                },
+                _ => 0.0,
+            };
+            let cur = &mut self.hole_open[i];
+            *cur += (target - *cur).clamp(-0.25, 0.25);
         }
     }
 

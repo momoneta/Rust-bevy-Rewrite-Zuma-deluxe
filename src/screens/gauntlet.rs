@@ -49,8 +49,10 @@ pub fn update(
     mut session: ResMut<Session>,
     profile: Res<Profile>,
     keys: Res<ButtonInput<KeyCode>>,
+    mut music: ResMut<crate::audio::MusicCtl>,
 ) {
     st.ticks += 1;
+    music.play(crate::audio::track::MAIN);
     let n = assets.levels.gauntlet.len();
     if n == 0 {
         next.set(Screen::MainMenu);

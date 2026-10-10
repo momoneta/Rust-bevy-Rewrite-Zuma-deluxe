@@ -6,8 +6,10 @@
 //! the [`Gfx`] resource in the 640x480 top-left-origin coordinate system of
 //! the original, and [`flush_gfx`] maps them onto a pool of sprite entities.
 
+use crate::additive::AdditiveMaterial;
 use crate::assets::{Font, Img};
 use bevy::camera::ScalingMode;
+use bevy::math::Affine2;
 use bevy::prelude::*;
 
 pub const SCREEN_W: f32 = 640.0;
@@ -23,6 +25,10 @@ struct DrawCmd {
     pivot: Vec2,
     color: Color,
     flip_x: bool,
+    /// Additive blending (`DRAWMODE_ADDITIVE`).
+    additive: bool,
+    /// Full texture size, for sub-rectangles of additive draws.
+    tex_size: Vec2,
 }
 
 /// Optional parameters for [`Gfx::draw_ex`].
@@ -36,11 +42,12 @@ pub struct DrawOpts {
     pub color: Color,
     pub scale: f32,
     pub flip_x: bool,
+    pub additive: bool,
 }
 
 impl Default for DrawOpts {
     fn default() -> Self {
-        Self { rot: 0.0, pivot: None, color: Color::WHITE, scale: 1.0, flip_x: false }
+        Self { rot: 0.0, pivot: None, color: Color::WHITE, scale: 1.0, flip_x: false, additive: false }
     }
 }
 
@@ -90,12 +97,20 @@ impl Gfx {
             pivot,
             color: o.color,
             flip_x: o.flip_x,
+            additive: o.additive,
+            tex_size: Vec2::new(img.w, img.h),
         });
     }
 
     /// Draws a centred image (cell) rotated around its centre.
     pub fn centered(&mut self, img: &Img, cel: usize, cx: f32, cy: f32, rot: f32, scale: f32, color: Color) {
         let o = DrawOpts { rot, color, scale, ..default() };
+        self.draw_ex(img, cel, cx - img.w * scale * 0.5, cy - img.h * scale * 0.5, o);
+    }
+
+    /// Like [`Gfx::centered`] with additive blending.
+    pub fn centered_add(&mut self, img: &Img, cel: usize, cx: f32, cy: f32, rot: f32, scale: f32, color: Color) {
+        let o = DrawOpts { rot, color, scale, additive: true, ..default() };
         self.draw_ex(img, cel, cx - img.w * scale * 0.5, cy - img.h * scale * 0.5, o);
     }
 
@@ -118,6 +133,8 @@ impl Gfx {
             pivot: o.pivot.map(|p| p * o.scale).unwrap_or(size * 0.5),
             color: o.color,
             flip_x: o.flip_x,
+            additive: o.additive,
+            tex_size: Vec2::new(img.w * img.cols as f32, img.h * img.rows as f32),
         });
     }
 
@@ -132,6 +149,8 @@ impl Gfx {
             pivot: Vec2::ZERO,
             color,
             flip_x: false,
+            additive: false,
+            tex_size: Vec2::ONE,
         });
     }
 
@@ -174,6 +193,8 @@ impl Gfx {
                         pivot: Vec2::ZERO,
                         color: tint,
                         flip_x: false,
+                        additive: false,
+                        tex_size: Vec2::ONE,
                     });
                 }
                 let kern = next.and_then(|n| layer.kerning.get(&(ch, n))).copied().unwrap_or(0);
@@ -264,19 +285,79 @@ fn cmd_transform(c: &DrawCmd, z: f32) -> (Transform, Vec2) {
     (t, c.size)
 }
 
-/// Copies the frame's draw commands onto sprite entities.
+/// Material cache key: texture, colour (8-bit RGBA) and UV rectangle.
+type MaterialKey = (AssetId<Image>, [u8; 4], [i32; 4]);
+
+/// Pool of additive quads. Materials are cached and swapped by handle:
+/// mutating a material every frame makes Bevy skip drawing it while the
+/// material is re-prepared.
+#[derive(Resource, Default)]
+pub struct AdditivePool {
+    quad: Option<Handle<Mesh>>,
+    entities: Vec<Entity>,
+    visible: usize,
+    cache: std::collections::HashMap<MaterialKey, Handle<AdditiveMaterial>>,
+}
+
+#[derive(Component)]
+pub struct AdditiveQuad;
+
+/// Copies the frame's draw commands onto sprite / additive quad entities.
+#[allow(clippy::too_many_arguments)]
 pub fn flush_gfx(
     mut commands: Commands,
     mut gfx: ResMut<Gfx>,
     mut pool: ResMut<SpritePool>,
-    mut q: Query<(&mut Sprite, &mut Transform, &mut Visibility), With<PooledSprite>>,
+    mut add_pool: ResMut<AdditivePool>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<AdditiveMaterial>>,
+    mut q: Query<(&mut Sprite, &mut Transform, &mut Visibility), (With<PooledSprite>, Without<AdditiveQuad>)>,
+    mut add_q: Query<(&mut Transform, &mut Visibility, &mut MeshMaterial2d<AdditiveMaterial>), (With<AdditiveQuad>, Without<PooledSprite>)>,
 ) {
     let cmds = std::mem::take(&mut gfx.cmds);
     gfx.offset = Vec2::ZERO;
+    let quad = add_pool.quad.get_or_insert_with(|| meshes.add(Rectangle::new(1.0, 1.0))).clone();
+    let (mut ns, mut na) = (0, 0);
     for (i, c) in cmds.iter().enumerate() {
-        let (t, size) = cmd_transform(c, i as f32 * 0.0005);
+        let (mut t, size) = cmd_transform(c, i as f32 * 0.0005);
+        if c.additive {
+            t.scale = Vec3::new(if c.flip_x { -size.x } else { size.x }, size.y, 1.0);
+            let rgba = c.color.to_srgba().to_u8_array();
+            let rect = c.src.map(|r| [r.min.x as i32, r.min.y as i32, r.max.x as i32, r.max.y as i32]).unwrap_or([0, 0, 0, 0]);
+            let key = (c.tex.id(), rgba, rect);
+            if add_pool.cache.len() > 4096 {
+                add_pool.cache.clear();
+            }
+            let handle = add_pool
+                .cache
+                .entry(key)
+                .or_insert_with(|| {
+                    let uv = match c.src {
+                        Some(r) => Affine2::from_scale_angle_translation(r.size() / c.tex_size, 0.0, r.min / c.tex_size),
+                        None => Affine2::IDENTITY,
+                    };
+                    materials.add(AdditiveMaterial { color: c.color.to_linear(), uv_transform: uv, texture: Some(c.tex.clone()) })
+                })
+                .clone();
+            if let Some(&e) = add_pool.entities.get(na) {
+                if let Ok((mut tr, mut vis, mut mat)) = add_q.get_mut(e) {
+                    *tr = t;
+                    if mat.0 != handle {
+                        mat.0 = handle;
+                    }
+                    if *vis != Visibility::Inherited {
+                        *vis = Visibility::Inherited;
+                    }
+                }
+            } else {
+                let e = commands.spawn((Mesh2d(quad.clone()), MeshMaterial2d(handle), t, Visibility::Inherited, AdditiveQuad)).id();
+                add_pool.entities.push(e);
+            }
+            na += 1;
+            continue;
+        }
         let sprite = Sprite { image: c.tex.clone(), color: c.color, custom_size: Some(size), rect: c.src, flip_x: c.flip_x, ..default() };
-        if let Some(&e) = pool.entities.get(i) {
+        if let Some(&e) = pool.entities.get(ns) {
             if let Ok((mut s, mut tr, mut vis)) = q.get_mut(e) {
                 *s = sprite;
                 *tr = t;
@@ -288,14 +369,20 @@ pub fn flush_gfx(
             let e = commands.spawn((sprite, t, Visibility::Inherited, PooledSprite)).id();
             pool.entities.push(e);
         }
+        ns += 1;
     }
-    let n = cmds.len();
-    for i in n..pool.visible.min(pool.entities.len()) {
+    for i in ns..pool.visible.min(pool.entities.len()) {
         if let Ok((_, _, mut vis)) = q.get_mut(pool.entities[i]) {
             *vis = Visibility::Hidden;
         }
     }
-    pool.visible = n;
+    pool.visible = ns;
+    for i in na..add_pool.visible.min(add_pool.entities.len()) {
+        if let Ok((_, mut vis, _)) = add_q.get_mut(add_pool.entities[i]) {
+            *vis = Visibility::Hidden;
+        }
+    }
+    add_pool.visible = na;
     gfx.cmds = cmds;
     gfx.cmds.clear();
 }

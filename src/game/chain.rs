@@ -126,8 +126,18 @@ impl Chain {
         b.pos >= 0.0 && !self.path.point(b.pos).in_tunnel
     }
 
+    /// Required centre distance between balls `i` and `i + 1`. A ball being
+    /// inserted grows from nothing to full size, so the chain opens smoothly.
+    pub fn spacing(&self, i: usize) -> f32 {
+        let w = |b: &Ball| match b.insert {
+            Some((_, t)) => BALL_D * t,
+            None => BALL_D,
+        };
+        (w(&self.balls[i]) + w(&self.balls[i + 1])) * 0.5
+    }
+
     pub fn touching(&self, i: usize) -> bool {
-        i + 1 < self.balls.len() && self.balls[i + 1].pos - self.balls[i].pos <= TOUCH
+        i + 1 < self.balls.len() && self.balls[i + 1].pos - self.balls[i].pos <= self.spacing(i) + (TOUCH - BALL_D)
     }
 
     /// Index range [lo, hi] of the touching segment containing `i`.
@@ -190,7 +200,7 @@ impl Chain {
     /// Pushes balls forward so that none overlaps the previous one, starting at `from`.
     fn propagate(&mut self, from: usize, merged: &mut Vec<usize>) {
         for i in from.max(1)..self.balls.len() {
-            let min = self.balls[i - 1].pos + BALL_D;
+            let min = self.balls[i - 1].pos + self.spacing(i - 1);
             if self.balls[i].pos < min {
                 if self.balls[i].back_vel < 0.0 {
                     // A segment rolling back hit the pushed one.
@@ -201,8 +211,6 @@ impl Chain {
                     merged.push(i);
                 }
                 self.balls[i].pos = min;
-            } else {
-                break;
             }
         }
     }
@@ -214,7 +222,7 @@ impl Chain {
         ball.back_vel = 0.0;
         self.balls.insert(idx, ball);
         let mut merged = Vec::new();
-        self.propagate(idx + 1, &mut merged);
+        self.propagate(idx, &mut merged);
         idx
     }
 
@@ -266,6 +274,10 @@ impl Chain {
                 b.pos += v;
             }
         }
+        if v < 0.0 {
+            // Inserted balls keep growing while the chain runs backwards.
+            self.propagate(1, &mut res.merged);
+        }
 
         // Segments roll back towards a matching colour behind them.
         let mut i = 0;
@@ -282,7 +294,7 @@ impl Chain {
                     b.back_vel = vel;
                     b.pos += vel;
                 }
-                let min = self.balls[i].pos + BALL_D;
+                let min = self.balls[i].pos + self.spacing(i);
                 if self.balls[i + 1].pos <= min {
                     let d = min - self.balls[i + 1].pos;
                     for b in &mut self.balls[i + 1..=hi] {

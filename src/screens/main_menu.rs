@@ -40,8 +40,10 @@ pub fn update(
     mut profile: ResMut<Profile>,
     mut exit: MessageWriter<AppExit>,
     mut windows: Query<&mut Window>,
+    mut music: ResMut<crate::audio::MusicCtl>,
 ) {
     st.ticks += 1;
+    music.play(crate::audio::track::MAIN);
     if !st.tried_mask {
         st.tried_mask = true;
         st.eye_mask = make_eye_mask(&assets, &mut images);
@@ -76,7 +78,7 @@ pub fn update(
         let t = if t > 250.0 { 500.0 - t } else { t };
         let alpha = (t * 75.0 / 250.0 + 75.0) / 255.0;
         let rot = st.ticks as f32 * std::f32::consts::PI / 180.0 * 0.3;
-        g.draw_ex(glow, 0, -69.0, -63.0, DrawOpts { rot, color: Color::srgba(1.0, 1.0, 0.0, alpha), ..default() });
+        g.draw_ex(glow, 0, -69.0, -63.0, DrawOpts { rot, color: Color::srgba(1.0, 1.0, 0.0, alpha), additive: true, ..default() });
     }
     if let Some(sun) = a.img("IMAGE_MM_SUN") {
         g.image(sun, 0.0, 2.0);

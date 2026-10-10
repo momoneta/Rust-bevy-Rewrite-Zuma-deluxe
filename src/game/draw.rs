@@ -90,13 +90,25 @@ pub fn draw_board(g: &mut Gfx, a: &GameAssets, lg: &LevelGfx, b: &Board, mouse: 
         g.image(bg, 0.0, 0.0);
     }
 
-    // Holes at the end of every path.
-    if let Some(hole) = a.img("IMAGE_HOLE") {
-        for c in &b.chains {
-            let p = c.screen_pos(c.len());
-            let pulse = if b.danger { 0.75 + 0.25 * (b.ticks as f32 * 0.2).sin() } else { 1.0 };
-            let color = Color::srgb(1.0, pulse, pulse);
+    // Holes at the end of every path, with the skull that opens as the
+    // chain approaches. `skullrot` (degrees) fixes its rotation; -1 turns
+    // the skull's mouth towards the incoming balls.
+    for (ci, c) in b.chains.iter().enumerate() {
+        let p = c.screen_pos(c.len());
+        let rot = if c.cfg.skull_rot >= 0 {
+            (c.cfg.skull_rot as f32).to_radians()
+        } else {
+            let d = p - c.screen_pos(c.len() - 24.0);
+            d.x.atan2(-d.y)
+        };
+        let pulse = if b.danger { 0.75 + 0.25 * (b.ticks as f32 * 0.2).sin() } else { 1.0 };
+        let color = Color::srgb(1.0, pulse, pulse);
+        if let Some(hole) = a.img("IMAGE_HOLE") {
             g.centered(hole, 0, p.x, p.y, 0.0, 1.0, color);
+        }
+        if let Some(cover) = a.img("IMAGE_HOLE_COVER") {
+            let frame = b.hole_open.get(ci).copied().unwrap_or(0.0).round() as usize;
+            g.centered(cover, frame, p.x, p.y, rot, 1.0, color);
         }
     }
 
@@ -117,7 +129,7 @@ pub fn draw_board(g: &mut Gfx, a: &GameAssets, lg: &LevelGfx, b: &Board, mouse: 
             for c in &b.chains {
                 if b.trail < c.len() {
                     let p = c.screen_pos(b.trail);
-                    g.centered(light, 0, p.x, p.y, 0.0, 2.0, Color::WHITE);
+                    g.centered_add(light, 0, p.x, p.y, 0.0, 2.5, Color::WHITE);
                 }
             }
         }
@@ -162,20 +174,20 @@ pub fn draw_board(g: &mut Gfx, a: &GameAssets, lg: &LevelGfx, b: &Board, mouse: 
                 if let Some(img) = a.img("IMAGE_GRAY_EXPLOSION") {
                     let frame = (e.age as usize * img.count() / e.life.max(1) as usize).min(img.count() - 1);
                     let c = super::BALL_RGB[color as usize];
-                    g.centered(img, frame, e.pos.x, e.pos.y, 0.0, 1.0, rgb(c, 1.0));
+                    g.centered_add(img, frame, e.pos.x, e.pos.y, 0.0, 1.0, rgb(c, 1.0));
                 }
             }
             EffectKind::Blast => {
                 if let Some(img) = a.img("IMAGE_EXPLOSION") {
                     let frame = (e.age as usize * img.count() / e.life.max(1) as usize).min(img.count() - 1);
-                    g.centered(img, frame, e.pos.x, e.pos.y, 0.0, 1.5, Color::WHITE);
+                    g.centered_add(img, frame, e.pos.x, e.pos.y, 0.0, 1.5, Color::WHITE);
                 }
             }
             EffectKind::Sparkle => {
                 if let Some(img) = a.img("IMAGE_SPARKLE") {
                     let frame = (e.age as usize / 3 + e.variant) % img.count();
                     let alpha = 1.0 - e.age as f32 / e.life as f32;
-                    g.centered(img, frame, e.pos.x, e.pos.y, 0.0, 1.0, Color::srgba(1.0, 1.0, 0.8, alpha));
+                    g.centered_add(img, frame, e.pos.x, e.pos.y, 0.0, 1.0, Color::srgba(1.0, 1.0, 0.8, alpha));
                 }
             }
         }
@@ -229,7 +241,7 @@ fn draw_chain(g: &mut Gfx, a: &GameAssets, b: &Board, c: &Chain, priority: u8) {
             };
             if let Some(l) = light {
                 let pulse = 0.6 + 0.4 * (b.ticks as f32 * 0.15).sin();
-                g.centered(l, 0, p.x, p.y, 0.0, 1.6, Color::srgba(1.0, 1.0, 1.0, pulse));
+                g.centered_add(l, 0, p.x, p.y, 0.0, 1.6, Color::srgba(1.0, 1.0, 1.0, pulse));
             }
         }
         let frame = ball.pos.max(0.0) as usize;

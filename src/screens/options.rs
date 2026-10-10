@@ -41,9 +41,9 @@ impl OptionsDialog {
         if (v - profile.music_volume).abs() > 0.001 {
             profile.music_volume = v;
         }
-        if a.music.is_none() {
+        if !a.has_music() {
             let small = a.font("FONT_MAIN8");
-            g.text(small, "(convert music/zuma.mo3 to ogg to enable)", x + 40.0, y + 170.0, Color::srgb(0.8, 0.7, 0.5));
+            g.text(small, "(run tools/convert_music.sh to enable)", x + 40.0, y + 170.0, Color::srgb(0.8, 0.7, 0.5));
         }
         // Full screen checkbox.
         let (cx, cy) = (x + 40.0, y + 182.0);

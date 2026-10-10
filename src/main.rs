@@ -3,6 +3,7 @@
 //! The engine reads the data files of an original Zuma Deluxe installation
 //! (images, levels, sounds, fonts); see README.md.
 
+mod additive;
 mod assets;
 mod audio;
 mod data;
@@ -38,8 +39,11 @@ fn main() {
         .insert_resource(debug::DebugOptions::from_args())
         .init_resource::<gfx::Gfx>()
         .init_resource::<gfx::SpritePool>()
+        .init_resource::<gfx::AdditivePool>()
+        .add_plugins(bevy::sprite_render::Material2dPlugin::<additive::AdditiveMaterial>::default())
         .init_resource::<input::Mouse>()
         .init_resource::<audio::Sfx>()
+        .init_resource::<audio::MusicCtl>()
         .add_plugins(screens::ScreensPlugin)
         .add_systems(Startup, gfx::setup_camera)
         .add_systems(Update, input::update_mouse.before(screens::ScreenSet))

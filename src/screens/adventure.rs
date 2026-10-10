@@ -80,8 +80,10 @@ pub fn update(
     mut session: ResMut<Session>,
     profile: Res<Profile>,
     keys: Res<ButtonInput<KeyCode>>,
+    mut music: ResMut<crate::audio::MusicCtl>,
 ) {
     st.ticks += 1;
+    music.play(crate::audio::track::MAIN);
     let a = &*assets;
     let max = profile.max_stage.min(a.levels.stages.len().saturating_sub(1));
     if let Some(sky) = a.img("IMAGE_ADVSKY") {

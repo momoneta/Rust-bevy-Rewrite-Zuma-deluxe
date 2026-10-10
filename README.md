@@ -16,7 +16,7 @@ con tus datos (ver “Capturas” abajo).
 
 ## Cómo jugar
 
-1. Instala Rust (1.95 o superior): <https://rustup.rs>
+1. Instala Rust (1.97.1 o superior, lo exige Bevy 0.20): <https://rustup.rs>
 2. En Linux instala las dependencias de Bevy:
    `sudo apt install pkg-config libasound2-dev libudev-dev libwayland-dev libxkbcommon-dev`
 3. Copia la carpeta de tu juego (la que contiene `images/`, `levels/`,
@@ -50,10 +50,21 @@ con tus datos (ver “Capturas” abajo).
 
 ### Música
 
-La música original es `music/zuma.mo3` (un módulo tracker comprimido de BASS)
-y Bevy no puede decodificarla. Si conviertes ese archivo a `.ogg` (por ejemplo
-con OpenMPT/XMPlay) y lo dejas en `data/music/`, el juego lo reproducirá en
-bucle. Los efectos de sonido (`sounds/*.ogg`) funcionan directamente.
+La música original es `music/zuma.mo3`, un módulo tracker comprimido de BASS
+que Bevy no puede decodificar. El script `tools/convert_music.sh` renderiza sus
+8 subcanciones a `music/zuma_0.ogg` … `zuma_7.ogg` (necesita `openmpt123` y
+`oggenc`: `sudo apt install openmpt123 vorbis-tools`):
+
+```
+tools/convert_music.sh data
+```
+
+El juego elige la pista igual que el original (que salta a posiciones de orden
+del módulo, `FUN_00511100`): tema principal en menús y niveles, música de
+peligro cuando la cadena se acerca al agujero, y los *jingles* de nivel
+completado, vida perdida, etapa completada y game over. Sin estos archivos el
+juego funciona igual, solo sin música. Los efectos de sonido (`sounds/*.ogg`)
+funcionan directamente.
 
 ## Qué está implementado
 
@@ -89,6 +100,10 @@ bucle. Los efectos de sonido (`sounds/*.ogg`) funcionan directamente.
   CHAIN BONUS `(n+5)·10` desde 5 aciertos seguidos; GAP/DOUBLE/TRIPLE GAP BONUS
   `((500·(300−g))/3000)·10`; monedas `max(500, faltante/600·100)`.
 - Power-ups: bomba, ralentizar, marcha atrás y precisión (con guía de disparo).
+- Inserción suave: la bola disparada crece y abre la cadena poco a poco.
+- Calavera del agujero que se abre al acercarse la cadena (`skullrot`).
+- Mezcla aditiva (como `DRAWMODE_ADDITIVE`) para explosiones, chispas, brillos
+  y luces, con un `Material2d` propio.
 - Monedas en los `TreasurePoint` con la frecuencia `treasurefreq` y duración de 10 s.
 - Barra Zuma (`score`): al llenarse deja de entrar bolas y la cadena retrocede.
 - Rana con las medidas originales (bola a 25 px de la boca, gema de la
@@ -107,7 +122,7 @@ final feliz. El progreso se guarda en `~/.config/zuma-bevy/profile.txt`
 
 ### Diferencias conocidas con el original
 
-- No hay música salvo que conviertas `zuma.mo3` (ver arriba).
+- La música necesita convertir `zuma.mo3` una vez (ver arriba).
 - El número de colores por nivel no está en `levels.xml`; se usa una
   aproximación (4 colores en las etapas 1–2, 5 en la 3–6, 6 a partir de la 7).
 - No se reproducen todavía: las piezas animadas de terremoto
@@ -131,10 +146,13 @@ src/
     validate.rs      test que comprueba todos los datos reales
   assets.rs          carga incremental a texturas/sonidos de Bevy
   gfx.rs             dibujo inmediato (como Sexy::Graphics) sobre sprites de Bevy
+  additive.rs        material 2D con mezcla aditiva
   game/              jugabilidad: board.rs, chain.rs, gun.rs, draw.rs
   screens/           estados: carga, menú, aventura, gauntlet, juego, opciones
   ui.rs              botones, diálogos y sliders con el arte original
-  audio.rs input.rs profile.rs debug.rs
+  audio.rs           efectos y música por pistas
+  input.rs profile.rs debug.rs
+tools/convert_music.sh   convierte zuma.mo3 a ogg
 ```
 
 ## Pruebas y herramientas de depuración

@@ -2,7 +2,7 @@
 //! folder and turned into Bevy assets.
 
 use crate::data::font::FontDesc;
-use crate::data::image_load::{self, additive_to_alpha, split_cells};
+use crate::data::image_load::{self, split_cells};
 use crate::data::levels::LevelDb;
 use crate::data::manifest::Manifest;
 use crate::data::vfs::{DataDir, SOUND_EXTS};
@@ -68,9 +68,6 @@ pub struct Sound {
     pub volume: f32,
 }
 
-/// Images drawn with additive blending in the original (black background).
-const ADDITIVE: &[&str] = &["IMAGE_EXPLOSION", "IMAGE_GRAY_EXPLOSION", "IMAGE_SPARKLE"];
-
 /// Resource groups loaded at start-up, in order.
 const GROUPS: &[&str] = &["Init", "Register", "LoadingThread", "MainMenu", "AdventureScreen", "GauntletScreen", "HelpScreen"];
 
@@ -82,7 +79,9 @@ pub struct GameAssets {
     pub images: HashMap<String, Img>,
     pub fonts: HashMap<String, Font>,
     pub sounds: HashMap<String, Sound>,
-    pub music: Option<Handle<AudioSource>>,
+    /// The eight subsongs of zuma.mo3, converted to ogg (see tools/convert_music.sh).
+    pub music: Vec<Option<Handle<AudioSource>>>,
+    music_loaded: bool,
     pub white: Handle<Image>,
     level_images: HashMap<String, Option<Img>>,
     pending: Vec<String>,
@@ -99,10 +98,7 @@ pub fn to_bevy_image(img: &image::RgbaImage) -> Image {
     )
 }
 
-fn make_img(images: &mut Assets<Image>, mut raw: image::RgbaImage, rows: u32, cols: u32, additive: bool) -> Img {
-    if additive {
-        additive_to_alpha(&mut raw);
-    }
+fn make_img(images: &mut Assets<Image>, raw: image::RgbaImage, rows: u32, cols: u32) -> Img {
     let full = images.add(to_bevy_image(&raw));
     let cells = if rows * cols > 1 {
         split_cells(&raw, rows, cols).iter().map(|c| images.add(to_bevy_image(c))).collect()
@@ -134,7 +130,8 @@ impl GameAssets {
             images: HashMap::new(),
             fonts: HashMap::new(),
             sounds: HashMap::new(),
-            music: None,
+            music: Vec::new(),
+            music_loaded: false,
             white,
             level_images: HashMap::new(),
             pending,
@@ -156,7 +153,8 @@ impl GameAssets {
                 break;
             }
         }
-        if self.pending.is_empty() && self.music.is_none() {
+        if self.pending.is_empty() && !self.music_loaded {
+            self.music_loaded = true;
             self.load_music(audio);
         }
         self.pending.is_empty()
@@ -180,7 +178,7 @@ impl GameAssets {
                 image_load::load_image(&self.dir, &res.path, res.alpha_image.as_deref(), res.alpha_grid.as_deref(), res.rows, res.cols);
             match raw {
                 Some(raw) => {
-                    let img = make_img(images, raw, res.rows, res.cols, ADDITIVE.contains(&id));
+                    let img = make_img(images, raw, res.rows, res.cols);
                     self.images.insert(id.to_string(), img);
                 }
                 None => warn!("missing image {id} ({})", res.path),
@@ -261,16 +259,27 @@ impl GameAssets {
 
     fn load_music(&mut self, audio: &mut Assets<AudioSource>) {
         // zuma.mo3 (a compressed tracker module) cannot be decoded by Bevy;
-        // a converted ogg/mp3/wav dropped into music/ is used instead.
-        let found = self
-            .dir
-            .list_dir("music")
-            .into_iter()
-            .find(|(k, _)| SOUND_EXTS.iter().any(|e| k.ends_with(&format!(".{e}"))))
-            .and_then(|(_, p)| std::fs::read(p).ok());
-        if let Some(bytes) = found {
-            self.music = Some(audio.add(AudioSource { bytes: bytes.into() }));
+        // its subsongs converted to music/zuma_N.ogg are used instead. Any
+        // other audio file in music/ stands in for the main theme.
+        let mut load = |rel: &str| {
+            let bytes = std::fs::read(self.dir.find_with_exts(rel, SOUND_EXTS)?).ok()?;
+            Some(audio.add(AudioSource { bytes: bytes.into() }))
+        };
+        let mut tracks: Vec<_> = (0..8).map(|i| load(&format!("music/zuma_{i}"))).collect();
+        if tracks[0].is_none() {
+            let other = self
+                .dir
+                .list_dir("music")
+                .into_iter()
+                .find(|(k, _)| SOUND_EXTS.iter().any(|e| k.ends_with(&format!(".{e}"))))
+                .map(|(k, _)| k.to_string());
+            tracks[0] = other.and_then(|k| load(&k));
         }
+        self.music = tracks;
+    }
+
+    pub fn has_music(&self) -> bool {
+        self.music.iter().any(Option::is_some)
     }
 
     pub fn img(&self, id: &str) -> Option<&Img> {
@@ -291,7 +300,7 @@ impl GameAssets {
         if let Some(i) = self.level_images.get(&key) {
             return i.clone();
         }
-        let img = image_load::load_image(&self.dir, rel, None, None, 1, 1).map(|raw| make_img(images, raw, 1, 1, false));
+        let img = image_load::load_image(&self.dir, rel, None, None, 1, 1).map(|raw| make_img(images, raw, 1, 1));
         self.level_images.insert(key, img.clone());
         img
     }
