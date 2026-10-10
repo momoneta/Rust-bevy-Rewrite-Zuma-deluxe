@@ -39,6 +39,10 @@ con tus datos (ver “Capturas” abajo).
    o con la variable de entorno `ZUMA_DATA`.
 4. `cargo run --release`
 
+En **Windows** no hace falta nada más que Rust: copia la carpeta del juego como
+`data` junto a `Cargo.toml` y ejecuta `cargo run --release` (o copia
+`target\release\zuma.exe` junto a la carpeta `data`).
+
 ### Controles
 
 | Acción | Control |
